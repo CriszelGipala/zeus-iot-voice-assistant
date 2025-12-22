@@ -4,9 +4,8 @@
 # Vosk models (large)
 models/vosk-model*/
 models/*.zip
-
-# Logs
-*.log
-
-# Env files
+logs/
 .env
+
+__pycache__/
+*.pyc
