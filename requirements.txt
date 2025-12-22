@@ -3,3 +3,4 @@ sounddevice
 sense-hat
 paho-mqtt
 requests
+python-dotenv
