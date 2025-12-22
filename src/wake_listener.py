@@ -3,8 +3,9 @@ import queue
 import sounddevice as sd
 from vosk import Model, KaldiRecognizer
 
-from config import WAKE_PHRASE, VOSK_MODEL_DIR, AUDIO_DEVICE_INDEX, SAMPLE_RATE
+from config import WAKE_PHRASE, VOSK_MODEL_DIR, AUDIO_DEVICE_INDEX
 from audio_output import speak
+
 
 audio_q = queue.Queue()
 
@@ -15,14 +16,17 @@ def callback(indata, frames, time, status):
 
 
 def listen_for_wake():
-    model = Model(VOSK_MODEL_DIR)
-    recognizer = KaldiRecognizer(model, SAMPLE_RATE)
+    device_info = sd.query_devices(AUDIO_DEVICE_INDEX, "input")
+    samplerate = int(device_info["default_samplerate"])
 
-    with sd.RawInputStream(
-        device=AUDIO_DEVICE_INDEX,
-        channels=1,
-        dtype="int16",
-        callback=callback
+    recognizer = KaldiRecognizer(model, samplerate)
+
+
+    with sd.InputStream(
+    device=AUDIO_DEVICE_INDEX,
+    channels=1,
+    samplerate=samplerate,
+    callback=callback,
 ):
 
         print("Listening for wake phrase:", WAKE_PHRASE)
