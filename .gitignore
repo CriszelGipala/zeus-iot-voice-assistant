@@ -1,0 +1,12 @@
+# Python venv
+.venv/
+
+# Vosk models (large)
+models/vosk-model*/
+models/*.zip
+
+# Logs
+*.log
+
+# Env files
+.env
