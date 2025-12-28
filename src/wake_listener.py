@@ -33,7 +33,7 @@ def main():
     last_trigger_time = 0.0
     suppress_until = 0.0
     mode = "wake"  # "wake" or "command"
-    command_timeout_seconds = 8.0
+    command_timeout_seconds = 20.0
     command_deadline = 0.0
 
     with sd.RawInputStream(
@@ -79,8 +79,14 @@ def main():
                     text = json.loads(cmd_recognizer.Result()).get("text", "").lower().strip()
                     print("FINAL(command):", text)
                     if text:
+                        # Allow re-trigger in conversation: say wake phrase to get the prompt again
+                        if WAKE_PHRASE in text:
+                            speak("How can I help you?")
+                            command_deadline = time.time() + command_timeout_seconds
+                            cmd_recognizer.Reset()
+                            suppress_until = time.time() + 0.6
                         # Exit phrases end the conversation and return to wake mode
-                        if _is_end_of_conversation(text):
+                        elif _is_end_of_conversation(text):
                             speak("Okay.")
                             mode = "wake"
                             cmd_recognizer.Reset()
@@ -108,6 +114,15 @@ def main():
                         partial = json.loads(cmd_recognizer.PartialResult()).get("partial", "")
                         if partial:
                             print("PARTIAL(command):", partial)
+                            # Also allow re-prompt on partial wake phrase during conversation
+                            if WAKE_PHRASE in partial:
+                                speak("How can I help you?")
+                                command_deadline = time.time() + command_timeout_seconds
+                                cmd_recognizer.Reset()
+                                suppress_until = time.time() + 0.6
+                            else:
+                                # Keep session alive while user is speaking
+                                command_deadline = time.time() + command_timeout_seconds
 
 
 def _handle_command(text: str) -> None:
@@ -127,28 +142,69 @@ def _handle_command(text: str) -> None:
     except Exception:
         ask_ai = None  # type: ignore
         ai_fallback_response = None  # type: ignore
+    # Simple diagnostics command
+    if any(w in text for w in ("diagnostic", "diagnostics", "status", "sensor status")):
+        try:
+            from sensors import get_temperature, get_humidity  # type: ignore
+            ok_temp = ok_hum = False
+            try:
+                _ = get_temperature()
+                ok_temp = True
+            except Exception as e:
+                print(f"[Sensors] Temperature check failed: {e}")
+            try:
+                _ = get_humidity()
+                ok_hum = True
+            except Exception as e:
+                print(f"[Sensors] Humidity check failed: {e}")
+            if ok_temp or ok_hum:
+                parts = []
+                parts.append("temperature OK" if ok_temp else "temperature unavailable")
+                parts.append("humidity OK" if ok_hum else "humidity unavailable")
+                speak("Sensor diagnostics: " + ", ".join(parts) + ".")
+            else:
+                speak("Sensors are unavailable right now.")
+        except Exception as e:
+            print(f"[Sensors] Diagnostics failed: {e}")
+            speak("Sensors are unavailable right now.")
+        return
+
     if "time" in text:
         now = datetime.now().strftime("%I:%M %p").lstrip("0")
         speak(f"The time is {now}.")
         return
 
-    if "temperature" in text:
+    # Combined ask (both temperature and humidity)
+    if (("temperature" in text) or ("temp" in text)) and (("humidity" in text) or ("humid" in text)):
+        try:
+            from sensors import get_temperature, get_humidity  # type: ignore
+            temp_c = get_temperature()
+            hum = get_humidity()
+            speak(f"The temperature is {temp_c:.1f} degrees Celsius and the humidity is {hum:.0f} percent.")
+        except Exception as e:
+            print(f"[Sensors] Temp+Humidity read error: {e}")
+            speak("Sorry, I can't read the sensors right now.")
+        return
+
+    if "temperature" in text or "temp" in text:
         try:
             if get_temperature is None:
                 raise RuntimeError("Sensors not available")
             temp_c = get_temperature()
             speak(f"The temperature is {temp_c:.1f} degrees Celsius.")
-        except Exception:
+        except Exception as e:
+            print(f"[Sensors] Temperature read error: {e}")
             speak("Sorry, I can't read the temperature right now.")
         return
 
-    if "humidity" in text:
+    if "humidity" in text or "humid" in text:
         try:
             if get_humidity is None:
                 raise RuntimeError("Sensors not available")
             hum = get_humidity()
             speak(f"The humidity is {hum:.0f} percent.")
-        except Exception:
+        except Exception as e:
+            print(f"[Sensors] Humidity read error: {e}")
             speak("Sorry, I can't read the humidity right now.")
         return
 
