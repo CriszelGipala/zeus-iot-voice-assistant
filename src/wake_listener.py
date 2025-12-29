@@ -4,6 +4,7 @@ import time
 import sounddevice as sd
 from vosk import Model, KaldiRecognizer
 from datetime import datetime
+import difflib
 
 from audio_output import speak
 from config import WAKE_PHRASE, AUDIO_DEVICE_INDEX, VOSK_MODEL_DIR
@@ -175,7 +176,7 @@ def _handle_command(text: str) -> None:
         return
 
     # Combined ask (both temperature and humidity)
-    if (("temperature" in text) or ("temp" in text)) and (("humidity" in text) or ("humid" in text)):
+    if (("temperature" in text) or ("temp" in text)) and _is_humidity_intent(text):
         try:
             from sensors import get_temperature, get_humidity  # type: ignore
             temp_c = get_temperature()
@@ -197,7 +198,7 @@ def _handle_command(text: str) -> None:
             speak("Sorry, I can't read the temperature right now.")
         return
 
-    if "humidity" in text or "humid" in text:
+    if _is_humidity_intent(text):
         try:
             if get_humidity is None:
                 raise RuntimeError("Sensors not available")
@@ -241,6 +242,27 @@ def _is_end_of_conversation(text: str) -> bool:
     )
     return any(w in text for w in words)
 
+
+def _is_humidity_intent(text: str) -> bool:
+    """
+    Returns True if the text likely refers to humidity, accounting for common mis-hearings.
+    Matches:
+    - substrings: 'humid', 'humidity', 'moisture', 'relative humidity', 'rh'
+    - common mis-hearings: 'humanity', 'humility', 'humidityy', 'humidty'
+    - fuzzy similarity tokens close to 'humidity'
+    """
+    t = text.lower().strip()
+    if "humid" in t or "moisture" in t or "relative humidity" in t or " rh " in f" {t} ":
+        return True
+    mishear = ("humanity", "humility", "humidityy", "humidty")
+    for m in mishear:
+        if m in t:
+            return True
+    tokens = t.split()
+    for token in tokens + [t]:
+        if difflib.SequenceMatcher(None, token, "humidity").ratio() >= 0.75:
+            return True
+    return False
 
 if __name__ == "__main__":
     main()
