@@ -1,4 +1,3 @@
-# src/mic_test.py
 import sounddevice as sd
 import numpy as np
 from config import AUDIO_DEVICE_INDEX

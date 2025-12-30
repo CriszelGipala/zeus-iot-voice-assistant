@@ -1,6 +1,4 @@
-import json
-import queue
-import time
+import json, queue, time
 import sounddevice as sd
 from vosk import Model, KaldiRecognizer
 from datetime import datetime
@@ -11,258 +9,144 @@ from config import WAKE_PHRASE, AUDIO_DEVICE_INDEX, VOSK_MODEL_DIR
 
 q = queue.Queue()
 
-def callback(indata, frames, time, status):
+def callback(indata, *_):
     q.put(bytes(indata))
 
 def main():
-    print(f"[Wake] Using wake phrase: '{WAKE_PHRASE}'")
-    print(f"[Wake] Using mic device index: {AUDIO_DEVICE_INDEX}")
-    print(f"[Wake] Using Vosk model dir: {VOSK_MODEL_DIR}")
+    print(f"[Wake] '{WAKE_PHRASE}' | mic={AUDIO_DEVICE_INDEX}")
 
     model = Model(VOSK_MODEL_DIR)
-    device = sd.query_devices(AUDIO_DEVICE_INDEX, "input")
-    samplerate = int(device["default_samplerate"])
+    sr = int(sd.query_devices(AUDIO_DEVICE_INDEX, "input")["default_samplerate"])
 
-    # Build two recognizers:
-    # 1) Wake recognizer biased to the wake phrase only
-    wake_grammar = json.dumps([WAKE_PHRASE])
-    wake_recognizer = KaldiRecognizer(model, samplerate, wake_grammar)
-    # 2) Command recognizer with full vocabulary
-    cmd_recognizer = KaldiRecognizer(model, samplerate)
+    wake = KaldiRecognizer(model, sr, json.dumps([WAKE_PHRASE]))
+    cmd  = KaldiRecognizer(model, sr)
 
-    cooldown_seconds = 3.0
-    last_trigger_time = 0.0
-    suppress_until = 0.0
-    mode = "wake"  # "wake" or "command"
-    command_timeout_seconds = 20.0
-    command_deadline = 0.0
+    mode = "wake"
+    last = suppress = 0
+    deadline = 0
+
+    def say(text, delay=0.6):
+        nonlocal suppress
+        speak(text)
+        suppress = time.time() + delay
+
+    def wake_mode():
+        nonlocal mode
+        mode = "wake"
+        cmd.Reset()
+
+    def cmd_mode():
+        nonlocal mode, deadline
+        mode = "cmd"
+        deadline = time.time() + 20
+        wake.Reset()
 
     with sd.RawInputStream(
         device=AUDIO_DEVICE_INDEX,
-        samplerate=samplerate,
+        samplerate=sr,
         blocksize=8000,
         dtype="int16",
         channels=1,
         callback=callback
     ):
+        print("Listening for wake word...")
         while True:
             data = q.get()
-
             now = time.time()
-            if now < suppress_until:
-                # Ignore mic while we're speaking or shortly after
+            if now < suppress:
                 continue
 
-            if mode == "wake":
-                if wake_recognizer.AcceptWaveform(data):
-                    text = json.loads(wake_recognizer.Result()).get("text", "").lower().strip()
-                    if text:
-                        print("FINAL(wake):", text)
-                    if text and WAKE_PHRASE in text and (now - last_trigger_time) >= cooldown_seconds:
-                        print("Wake phrase detected!")
-                        speak("How can I help you?")
-                        last_trigger_time = now
-                        # Suppress mic pickup of our own TTS
-                        suppress_until = now + 1.0
-                        # Switch to command mode
-                        mode = "command"
-                        command_deadline = now + command_timeout_seconds
-                        wake_recognizer.Reset()
+            rec = wake if mode == "wake" else cmd
+
+            if rec.AcceptWaveform(data):
+                text = json.loads(rec.Result()).get("text", "").lower().strip()
+                if not text:
+                    continue
+                print(f"FINAL({mode}):", text)
+
+                if mode == "wake":
+                    if WAKE_PHRASE in text and now - last > 3:
+                        last = now
+                        say("How can I help you?", 1.0)
+                        cmd_mode()
+
                 else:
-                    # Reduce noise by not spamming partials in wake mode
-                    partial = json.loads(wake_recognizer.PartialResult()).get("partial", "")
-                    if partial and partial != WAKE_PHRASE:
-                        print("PARTIAL(wake):", partial)
+                    if WAKE_PHRASE in text:
+                        say("How can I help you?")
+                        deadline = time.time() + 20
+                    elif is_end(text):
+                        say("No problem.")
+                        wake_mode()
+                    else:
+                        handle_command(text)
+                        deadline = time.time() + 20
+                        suppress = time.time() + 0.6
+                        cmd.Reset()
 
             else:
-                # Command mode: listen for a short utterance
-                if cmd_recognizer.AcceptWaveform(data):
-                    text = json.loads(cmd_recognizer.Result()).get("text", "").lower().strip()
-                    print("FINAL(command):", text)
-                    if text:
-                        # Allow re-trigger in conversation: say wake phrase to get the prompt again
-                        if WAKE_PHRASE in text:
-                            speak("How can I help you?")
-                            command_deadline = time.time() + command_timeout_seconds
-                            cmd_recognizer.Reset()
-                            suppress_until = time.time() + 0.6
-                        # Exit phrases end the conversation and return to wake mode
-                        elif _is_end_of_conversation(text):
-                            speak("Okay.")
-                            mode = "wake"
-                            cmd_recognizer.Reset()
-                            suppress_until = time.time() + 0.6
-                        else:
-                            _handle_command(text)
-                            # Stay in conversation; extend deadline for next question
-                            command_deadline = time.time() + command_timeout_seconds
-                            cmd_recognizer.Reset()
-                            suppress_until = time.time() + 0.6
-                    else:
-                        # Nothing recognized; keep listening briefly
-                        speak("Sorry, I didn't catch that.")
-                        command_deadline = time.time() + command_timeout_seconds
-                        cmd_recognizer.Reset()
-                        suppress_until = time.time() + 0.4
-                else:
-                    # Time out if user stays silent
-                    if time.time() >= command_deadline:
-                        speak("Okay.")
-                        mode = "wake"
-                        cmd_recognizer.Reset()
-                        suppress_until = time.time() + 0.6
-                    else:
-                        partial = json.loads(cmd_recognizer.PartialResult()).get("partial", "")
-                        if partial:
-                            print("PARTIAL(command):", partial)
-                            # Also allow re-prompt on partial wake phrase during conversation
-                            if WAKE_PHRASE in partial:
-                                speak("How can I help you?")
-                                command_deadline = time.time() + command_timeout_seconds
-                                cmd_recognizer.Reset()
-                                suppress_until = time.time() + 0.6
-                            else:
-                                # Keep session alive while user is speaking
-                                command_deadline = time.time() + command_timeout_seconds
+                partial = json.loads(rec.PartialResult()).get("partial", "")
+                if partial:
+                    print(f"PARTIAL({mode}):", partial)
+                    if mode == "cmd":
+                        deadline = time.time() + 20
+                        if WAKE_PHRASE in partial:
+                            say("How can I help you?")
+                if mode == "cmd" and time.time() > deadline:
+                    say("Okay.")
+                    wake_mode()
 
+# ---------------- helpers ----------------
 
-def _handle_command(text: str) -> None:
-    """
-    Very simple intent handling:
-    - Local: time, temperature, humidity
-    - Otherwise: try AI API, fall back to canned message
-    """
-    # Import optional modules lazily to avoid breaking wake mode
+def handle_command(text):
     try:
-        from sensors import get_temperature, get_humidity  # type: ignore
+        from sensors import get_temperature, get_humidity
     except Exception:
-        get_temperature = None  # type: ignore
-        get_humidity = None  # type: ignore
+        get_temperature = get_humidity = None
+
     try:
-        from ai_client import ask_ai, ai_fallback_response  # type: ignore
+        from ai_client import ask_ai, ai_fallback_response
     except Exception:
-        ask_ai = None  # type: ignore
-        ai_fallback_response = None  # type: ignore
-    # Simple diagnostics command
-    if any(w in text for w in ("diagnostic", "diagnostics", "status", "sensor status")):
-        try:
-            from sensors import get_temperature, get_humidity  # type: ignore
-            ok_temp = ok_hum = False
-            try:
-                _ = get_temperature()
-                ok_temp = True
-            except Exception as e:
-                print(f"[Sensors] Temperature check failed: {e}")
-            try:
-                _ = get_humidity()
-                ok_hum = True
-            except Exception as e:
-                print(f"[Sensors] Humidity check failed: {e}")
-            if ok_temp or ok_hum:
-                parts = []
-                parts.append("temperature OK" if ok_temp else "temperature unavailable")
-                parts.append("humidity OK" if ok_hum else "humidity unavailable")
-                speak("Sensor diagnostics: " + ", ".join(parts) + ".")
-            else:
-                speak("Sensors are unavailable right now.")
-        except Exception as e:
-            print(f"[Sensors] Diagnostics failed: {e}")
-            speak("Sensors are unavailable right now.")
-        return
+        ask_ai = ai_fallback_response = None
 
     if "time" in text:
-        now = datetime.now().strftime("%I:%M %p").lstrip("0")
-        speak(f"The time is {now}.")
+        speak(datetime.now().strftime("The time is %I:%M %p").lstrip("0"))
         return
 
-    # Combined ask (both temperature and humidity)
-    if (("temperature" in text) or ("temp" in text)) and _is_humidity_intent(text):
-        try:
-            from sensors import get_temperature, get_humidity  # type: ignore
-            temp_c = get_temperature()
-            hum = get_humidity()
-            speak(f"The temperature is {temp_c:.1f} degrees Celsius and the humidity is {hum:.0f} percent.")
-        except Exception as e:
-            print(f"[Sensors] Temp+Humidity read error: {e}")
-            speak("Sorry, I can't read the sensors right now.")
-        return
-
-    if "temperature" in text or "temp" in text:
-        try:
-            if get_temperature is None:
-                raise RuntimeError("Sensors not available")
-            temp_c = get_temperature()
-            speak(f"The temperature is {temp_c:.1f} degrees Celsius.")
-        except Exception as e:
-            print(f"[Sensors] Temperature read error: {e}")
-            speak("Sorry, I can't read the temperature right now.")
-        return
-
-    if _is_humidity_intent(text):
-        try:
-            if get_humidity is None:
-                raise RuntimeError("Sensors not available")
-            hum = get_humidity()
-            speak(f"The humidity is {hum:.0f} percent.")
-        except Exception as e:
-            print(f"[Sensors] Humidity read error: {e}")
-            speak("Sorry, I can't read the humidity right now.")
-        return
-
-    # Try AI extension if configured
-    ai_reply = None
-    if ask_ai is not None:
-        try:
-            ai_reply = ask_ai(text)  # type: ignore
-        except Exception:
-            ai_reply = None
-    if ai_reply:
-        speak(ai_reply)
-    else:
-        if ai_fallback_response is not None:
-            speak(ai_fallback_response())  # type: ignore
+    if wants_humidity(text) and "temp" in text:
+        if get_temperature and get_humidity:
+            speak(f"The temperature is {get_temperature():.1f} degrees Celsius and humidity {get_humidity():.0f} percent.")
         else:
-            speak("I'm not available right now.")
+            speak("Sensors are unavailable.")
+        return
 
+    if "temp" in text:
+        speak(f"The temperature is {get_temperature():.1f} degrees Celsius." if get_temperature else "Temperature unavailable.")
+        return
 
-def _is_end_of_conversation(text: str) -> bool:
-    words = (
-        "stop",
-        "cancel",
-        "nevermind",
-        "never mind",
-        "thank you",
-        "thanks",
-        "goodbye",
-        "go to sleep",
-        "that's all",
-        "that is all",
-        "exit",
-        "quit",
-    )
-    return any(w in text for w in words)
+    if wants_humidity(text):
+        speak(f"The humidity is {get_humidity():.0f} percent." if get_humidity else "Humidity unavailable.")
+        return
 
+    if ask_ai:
+        try:
+            reply = ask_ai(text)
+            if reply:
+                speak(reply)
+                return
+        except Exception:
+            pass
 
-def _is_humidity_intent(text: str) -> bool:
-    """
-    Returns True if the text likely refers to humidity, accounting for common mis-hearings.
-    Matches:
-    - substrings: 'humid', 'humidity', 'moisture', 'relative humidity', 'rh'
-    - common mis-hearings: 'humanity', 'humility', 'humidityy', 'humidty'
-    - fuzzy similarity tokens close to 'humidity'
-    """
-    t = text.lower().strip()
-    if "humid" in t or "moisture" in t or "relative humidity" in t or " rh " in f" {t} ":
+    speak(ai_fallback_response() if ai_fallback_response else "I'm not available right now.")
+
+def is_end(t):
+    return any(w in t for w in (
+        "stop","cancel","thanks","thank you","goodbye","exit","quit","that's all"
+    ))
+
+def wants_humidity(t):
+    if any(w in t for w in ("humid","humidity","moisture","rh")):
         return True
-    mishear = ("humanity", "humility", "humidityy", "humidty")
-    for m in mishear:
-        if m in t:
-            return True
-    tokens = t.split()
-    for token in tokens + [t]:
-        if difflib.SequenceMatcher(None, token, "humidity").ratio() >= 0.75:
-            return True
-    return False
+    return difflib.SequenceMatcher(None, t, "humidity").ratio() > 0.75
 
 if __name__ == "__main__":
     main()
