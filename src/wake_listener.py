@@ -6,12 +6,6 @@ import difflib
 
 from audio_output import speak
 from config import WAKE_PHRASE, AUDIO_DEVICE_INDEX, VOSK_MODEL_DIR
-try:
-    # Controlled by Blynk V1 button
-    from blynk_client import is_assistant_enabled  # type: ignore
-except Exception:
-    def is_assistant_enabled() -> bool:  # type: ignore
-        return True
 
 q = queue.Queue()
 
@@ -61,13 +55,6 @@ def main():
             now = time.time()
             if now < suppress:
                 continue
-            # If disabled via Blynk, idle in wake mode without processing
-            if not is_assistant_enabled():
-                if mode != "wake":
-                    mode = "wake"
-                    cmd.Reset()
-                time.sleep(0.1)
-                continue
 
             rec = wake if mode == "wake" else cmd
 
@@ -78,13 +65,13 @@ def main():
                 print(f"FINAL({mode}):", text)
 
                 if mode == "wake":
-                    if text == WAKE_PHRASE and now - last > 3:
+                    if WAKE_PHRASE in text and now - last > 3:
                         last = now
                         say("How can I help you?", 1.0)
                         cmd_mode()
 
                 else:
-                    if text == WAKE_PHRASE:
+                    if WAKE_PHRASE in text:
                         say("How can I help you?")
                         deadline = time.time() + 20
                     elif is_end(text):
@@ -102,7 +89,8 @@ def main():
                     print(f"PARTIAL({mode}):", partial)
                     if mode == "cmd":
                         deadline = time.time() + 20
-                        # Do not trigger on partials to avoid false wakes
+                        if WAKE_PHRASE in partial:
+                            say("How can I help you?")
                 if mode == "cmd" and time.time() > deadline:
                     say("Okay.")
                     wake_mode()
