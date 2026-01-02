@@ -1,0 +1,20 @@
+[#] Zeus IoT Voice Assistant - systemd service
+[Unit]
+Description=Zeus IoT Voice Assistant
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/cgipala/zeus-iot-voice-assistant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/cgipala/zeus-iot-voice-assistant/src
+ExecStart=/home/cgipala/zeus-iot-voice-assistant/.venv/bin/python /home/cgipala/zeus-iot-voice-assistant/src/main.py
+Restart=on-failure
+User=cgipala
+Group=cgipala
+
+[Install]
+WantedBy=multi-user.target
+
+

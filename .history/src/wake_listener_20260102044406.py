@@ -6,12 +6,6 @@ import difflib
 
 from audio_output import speak
 from config import WAKE_PHRASE, AUDIO_DEVICE_INDEX, VOSK_MODEL_DIR
-try:
-    # Controlled by Blynk V1 button
-    from blynk_client import is_assistant_enabled  # type: ignore
-except Exception:
-    def is_assistant_enabled() -> bool:  # type: ignore
-        return True
 
 q = queue.Queue()
 
@@ -60,13 +54,6 @@ def main():
             data = q.get()
             now = time.time()
             if now < suppress:
-                continue
-            # If disabled via Blynk, idle in wake mode without processing
-            if not is_assistant_enabled():
-                if mode != "wake":
-                    mode = "wake"
-                    cmd.Reset()
-                time.sleep(0.1)
                 continue
 
             rec = wake if mode == "wake" else cmd

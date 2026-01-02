@@ -10,23 +10,19 @@ sense.clear()
 
 blynk = BlynkLib.Blynk(BLYNK_TOKEN)
 
+INACTIVITY_TIMEOUT = 30
+blynk.last_activity = time()
 _stop_event = Event()
-assistant_enabled = True
-
-def is_assistant_enabled() -> bool:
-    return assistant_enabled
 
 @blynk.on("V1")
 def handle_v1_write(value):
-    global assistant_enabled
     button_value = int(value[0])
+    blynk.last_activity = time()
     print(f'Current button value: {button_value}')
 
     if button_value == 1:
-        assistant_enabled = True
         sense.clear(255,255,255)
     else:
-        assistant_enabled = False
         sense.clear()
 
 @blynk.on("V2")
@@ -68,6 +64,11 @@ def _blynk_loop():
                 blynk.virtual_write(0, sense.get_temperature())
             except Exception:
                 pass
+            now = time()
+            # If there's been no activity, break out of loop
+            if now - blynk.last_activity > INACTIVITY_TIMEOUT:
+                print(f"No activity for {INACTIVITY_TIMEOUT} seconds. Exiting Blynk loop.")
+                break
             sleep(2)  # Add a short delay to avoid high CPU usage
     except KeyboardInterrupt:
         print("Blynk thread interrupted.")

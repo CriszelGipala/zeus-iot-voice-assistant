@@ -12,6 +12,7 @@ blynk = BlynkLib.Blynk(BLYNK_TOKEN)
 
 _stop_event = Event()
 assistant_enabled = True
+_beat_state = False
 
 def is_assistant_enabled() -> bool:
     return assistant_enabled
@@ -63,6 +64,19 @@ def _blynk_loop():
     try:
         while not _stop_event.is_set():
             blynk.run()  # Process Blynk events
+            # Heartbeat: pulse top-left pixel when assistant is enabled
+            try:
+                global _beat_state
+                if assistant_enabled:
+                    _beat_state = not _beat_state
+                    if _beat_state:
+                        sense.set_pixel(0, 0, 0, 255, 0)  # green pulse
+                    else:
+                        sense.set_pixel(0, 0, 255, 255, 255)  # match 'on' white
+                else:
+                    sense.set_pixel(0, 0, 0, 0, 0)  # off
+            except Exception:
+                pass
             # Example telemetry: Sense HAT temperature on virtual pin V0
             try:
                 blynk.virtual_write(0, sense.get_temperature())
