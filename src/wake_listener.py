@@ -39,9 +39,6 @@ def main():
         speak(text)
         suppress = time.time() + delay
 
-    def eq_wake(t: str) -> bool:
-        return t == WAKE_PHRASE
-
     def wake_mode():
         nonlocal mode
         mode = "wake"
@@ -52,15 +49,6 @@ def main():
         mode = "cmd"
         deadline = time.time() + 20
         wake.Reset()
-
-    def extend_deadline():
-        nonlocal deadline
-        deadline = time.time() + 20
-
-    def prompt_user(delay: float = 0.6):
-        nonlocal last_prompt
-        last_prompt = time.time()
-        say("How can I help you?", delay)
 
     with sd.RawInputStream(
         device=AUDIO_DEVICE_INDEX,
@@ -77,37 +65,31 @@ def main():
                     q.get_nowait()
             except Exception:
                 pass
-        def _sync_enabled(now_ts: float) -> bool:
-            nonlocal prev_enabled, last, last_prompt, suppress, mode
-            enabled = is_assistant_enabled()
-            if enabled != prev_enabled:
-                if not enabled:
-                    mode = "wake"
-                    cmd.Reset()
-                    wake.Reset()
-                    _drain_queue()
-                    suppress = time.time() + 0.2
-                else:
-                    cmd.Reset()
-                    wake.Reset()
-                    _drain_queue()
-                    last = now_ts
-                    last_prompt = now_ts
-                    suppress = now_ts + 0.5
-                prev_enabled = enabled
-            return enabled
-
-        def _maybe_timeout_cmd():
-            if mode == "cmd" and time.time() > deadline:
-                say("Okay.")
-                wake_mode()
         while True:
             data = q.get()
             now = time.time()
             if now < suppress:
                 continue
             # Sync with Blynk assistant enable/disable
-            if not _sync_enabled(now):
+            enabled = is_assistant_enabled()
+            if enabled != prev_enabled:
+                if not enabled:
+                    # Turning OFF: stop listening, reset recognizers, clear backlog
+                    mode = "wake"
+                    cmd.Reset()
+                    wake.Reset()
+                    _drain_queue()
+                    suppress = time.time() + 0.2
+                else:
+                    # Turning ON: reset recognizers and clear backlog to avoid burst triggers
+                    cmd.Reset()
+                    wake.Reset()
+                    _drain_queue()
+                    last = now
+                    last_prompt = now
+                    suppress = now + 0.5
+                prev_enabled = enabled
+            if not enabled:
                 time.sleep(0.1)
                 continue
 
@@ -120,21 +102,23 @@ def main():
                 print(f"FINAL({mode}):", text)
 
                 if mode == "wake":
-                    if eq_wake(text) and (now - last) > 3 and (now - last_prompt) > 3:
+                    if text == WAKE_PHRASE and (now - last) > 3 and (now - last_prompt) > 3:
                         last = now
-                        prompt_user(1.0)
+                        last_prompt = now
+                        say("How can I help you?", 1.0)
                         cmd_mode()
 
                 else:
-                    if eq_wake(text) and (now - last_prompt) > 3:
-                        prompt_user()
-                        extend_deadline()
+                    if text == WAKE_PHRASE and (now - last_prompt) > 3:
+                        last_prompt = now
+                        say("How can I help you?")
+                        deadline = time.time() + 20
                     elif is_end(text):
                         say("No problem.")
                         wake_mode()
                     else:
                         handle_command(text)
-                        extend_deadline()
+                        deadline = time.time() + 20
                         suppress = time.time() + 0.6
                         cmd.Reset()
 
@@ -143,9 +127,11 @@ def main():
                 if partial:
                     print(f"PARTIAL({mode}):", partial)
                     if mode == "cmd":
-                        extend_deadline()
+                        deadline = time.time() + 20
                         # Do not trigger on partials to avoid false wakes
-                _maybe_timeout_cmd()
+                if mode == "cmd" and time.time() > deadline:
+                    say("Okay.")
+                    wake_mode()
 
 # ---------------- helpers ----------------
 
