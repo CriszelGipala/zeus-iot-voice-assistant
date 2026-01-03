@@ -3,6 +3,8 @@ from config import BLYNK_TOKEN
 from time import time, sleep
 from sense_hat import SenseHat
 from threading import Thread, Event
+from thingspeak_client import send_switch
+
 
 sense = SenseHat()
 sense.clear()
@@ -24,38 +26,11 @@ def handle_v1_write(value):
     if button_value == 1:
         assistant_enabled = True
         sense.clear(255,255,255)
+        send_switch(1)
     else:
         assistant_enabled = False
         sense.clear()
-
-@blynk.on("V2")
-def handle_shutdown(value):
-    """
-    V2 button: when pressed (value '1'), shutdown the Raspberry Pi.
-    Requires passwordless sudo for /sbin/shutdown.
-    """
-    try:
-        pressed = str(value[0]).strip() in ("1", "on", "true")
-    except Exception:
-        pressed = False
-    if pressed:
-        print("[Blynk] Shutdown requested via V2")
-        # Non-blocking to allow print to flush
-        subprocess.Popen(["sudo", "shutdown", "-h", "now"])
-
-@blynk.on("V3")
-def handle_reboot(value):
-    """
-    V3 button: when pressed (value '1'), reboot the Raspberry Pi.
-    Requires passwordless sudo for /sbin/reboot.
-    """
-    try:
-        pressed = str(value[0]).strip() in ("1", "on", "true")
-    except Exception:
-        pressed = False
-    if pressed:
-        print("[Blynk] Reboot requested via V3")
-        subprocess.Popen(["sudo", "reboot"])
+        send_switch(0)
 
 def _blynk_loop():
     print("Blynk thread started. Listening for events...")
