@@ -18,6 +18,8 @@ https://www.youtube.com/shorts/L1Sjp0GxqyI
 
 ---
 
+github repo: https://github.com/CriszelGipala/zeus-iot-voice-assistant
+
 ## Overview
 
 - **Wake phrase:** `hey zeus`
