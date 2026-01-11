@@ -7,9 +7,8 @@ It combines **offline speech recognition**, **sensor readings**, and **cloud not
 ---
 
 ## 🎥 Demo Video
-
 ▶️ **YouTube:**  
-(DON'T FOEGET TO PUT THE LINK HERE ONCE THE VIDEO HAS BEING UPLOADED TO YT)
+https://www.youtube.com/shorts/L1Sjp0GxqyI
 > The demo shows:
 > - Wake phrase detection (`hey zeus`)
 > - Speech-to-text processing (offline)
